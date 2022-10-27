@@ -1,198 +1,232 @@
-   #include "freertos/FreeRTOS.h"
-#include "esp_wifi.h"
-#include "esp_wifi_types.h"
-#include "esp_system.h"
-#include "esp_event.h"
-#include "esp_event_loop.h"
-#include "nvs_flash.h"
+  #include <Wire.h>
+#include "secrets.h"
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include "WiFi.h"
+#include "ESPDateTime.h"
+#include <Separador.h>
 
-#include "driver/gpio.h"
-#include <sstream>
-
-#define LED_GPIO_PIN                     5
-#define WIFI_CHANNEL_SWITCH_INTERVAL  (1000)
-#define WIFI_CHANNEL_MAX               (13)
-
-uint8_t mac_lib[100][6];
-int mac_count = 0;
-int data_count=0;
-int mgmnt_count=0;
-int pot_prom_m=0;
-int pot_prom_d=0;
-
+#define AWS_IOT_PUBLISH_TOPIC   "esp32/pub"
+#define AWS_IOT_PUBLISH_TOPIC2   "esp32/tab"
+#define AWS_IOT_PUBLISH_TOPIC3   "esp32/message"
 #define RXD2 16
 #define TXD2 17
 
-String mad="";
-uint8_t level = 0, channel = 1;
+Separador s;
 
-static wifi_country_t wifi_country = {.cc="CO", .schan = 1, .nchan = 13}; //Most recent esp32 library struct
+WiFiClientSecure net = WiFiClientSecure();
+PubSubClient client(net);
 
-typedef struct {
-  unsigned frame_ctrl:16;
-  unsigned duration_id:16;
-  uint8_t addr1[6]; /* receiver address */
-  uint8_t addr2[6]; /* sender address */
-  uint8_t addr3[6]; /* filtering address */
-  unsigned sequence_ctrl:16;
-  uint8_t addr4[6]; /* optional */
-} wifi_ieee80211_mac_hdr_t;
+String inputString = "";  // a String to hold incoming data
+String DATA=""; 
+String MNGMT="";
+String PPROM_M="";
+String PPROM_D="";
+String MAC="";
+String TYPE="";
+String PRSSI=""; 
+String CHANN="";
+String datos="";
+bool stringComplete = false; 
 
-typedef struct {
-  wifi_ieee80211_mac_hdr_t hdr;
-  uint8_t payload[0]; /* network data ended with 4 bytes csum (CRC32) */
-} wifi_ieee80211_packet_t;
+void wifiInit(){
+   
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-static esp_err_t event_handler(void *ctx, system_event_t *event);
-static void wifi_sniffer_init(void);
-static void wifi_sniffer_set_channel(uint8_t channel);
-static const char *wifi_sniffer_packet_type2str(wifi_promiscuous_pkt_type_t type);
-static void wifi_sniffer_packet_handler(void *buff, wifi_promiscuous_pkt_type_t type);
+  Serial.println("Connecting to Wi-Fi");
 
-esp_err_t event_handler(void *ctx, system_event_t *event)
-{
-  return ESP_OK;
-}
-
-byte mac[6];
-
-void wifi_sniffer_init(void)
-{
-  nvs_flash_init();
-  tcpip_adapter_init();
-  ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
-  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-  ESP_ERROR_CHECK( esp_wifi_set_country(&wifi_country) ); /* set country for channel range [1, 13] */
-  ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-  ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_NULL) );
-  ESP_ERROR_CHECK( esp_wifi_start() );
-  esp_wifi_set_promiscuous(true);
-  esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
-}
-
-void wifi_sniffer_set_channel(uint8_t channel)
-{
-  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
-}
-
-
-const char * wifi_sniffer_packet_type2str(wifi_promiscuous_pkt_type_t type)
-{
-  switch(type) {
-  case WIFI_PKT_MGMT: return "M";
-  case WIFI_PKT_DATA: return "D";
-  default:  
-  case WIFI_PKT_MISC: return "E";
+  while (WiFi.status() != WL_CONNECTED){
+    delay(500);
+    Serial.print(".");
   }
 }
 
-void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
+void connectAWS()
 {
   
-//  if (type != WIFI_PKT_MGMT)   //filtro por tipo de paquete
-//    return;
 
-  const wifi_promiscuous_pkt_t *ppkt = (wifi_promiscuous_pkt_t *)buff;
-  const wifi_ieee80211_packet_t *ipkt = (wifi_ieee80211_packet_t *)ppkt->payload;
-  const wifi_ieee80211_mac_hdr_t *hdr = &ipkt->hdr;
+  // Configure WiFiClientSecure to use the AWS IoT device credentials
+  net.setCACert(AWS_CERT_CA);
+  net.setCertificate(AWS_CERT_CRT);
+  net.setPrivateKey(AWS_CERT_PRIVATE);
 
+  // Connect to the MQTT broker on the AWS endpoint we defined earlier
+  client.setServer(AWS_IOT_ENDPOINT, 8883);
 
-  Serial2.printf(",,,,,""%s,""%02x:%02x:%02x:%02x:%02x:%02x," "%02d,""%02d \n",
-          wifi_sniffer_packet_type2str(type),
-          hdr->addr2[0],hdr->addr2[1],hdr->addr2[2],
-          hdr->addr2[3],hdr->addr2[4],hdr->addr2[5],
-          ppkt->rx_ctrl.rssi,
-          channel         
-          );
+  Serial.print("\n Connecting to AWS IOT \n");
 
+  while (!client.connect(THINGNAME)) {
+    Serial.print(".");
+    delay(100);
+  }
 
-
-if (check_mac_only(hdr->addr2)){
- printf(",,,,,""%s,""%02x:%02x:%02x:%02x:%02x:%02x," "%02d,""%02d \n",
-          wifi_sniffer_packet_type2str(type),
-          hdr->addr2[0],hdr->addr2[1],hdr->addr2[2],
-          hdr->addr2[3],hdr->addr2[4],hdr->addr2[5],
-          ppkt->rx_ctrl.rssi,
-          channel         
-          );
-          
-
-
-          
-       if (type == WIFI_PKT_MGMT){
-            mgmnt_count+=1;
-            pot_prom_m+=ppkt->rx_ctrl.rssi;}
-       else{
-            data_count+=1;
-            pot_prom_d+=ppkt->rx_ctrl.rssi;
-       }
-   }
-
-   
-          delay(500);
-          return;
+  if(!client.connected()){
+    Serial.println("\n AWS IoT Timeout!");
+    return;
+  }
 
 }
 
-String create_data_str(int mac_count,int data_count,int mgmnt_count,int pot_prom_m,int pot_prom_d)
-{
-  String data = "";
-  data = String(mac_count) + "," + String(data_count)+ "," +String(mgmnt_count)+","+ String(pot_prom_m/mgmnt_count)+ "," + String(pot_prom_d/data_count );
-  return data;
-}
+void reconnect() {
+  while (!client.connect(THINGNAME)) {
+    Serial.print("Intentando conectarse MQTT...");
 
-int check_mac_only(const uint8_t addr2[6])
-{
-  for (char i = 0; i < mac_count; i++)
-  {
-    bool flag = true;
-    for (char j = 0; j < 6; j++)
-    {
-      if (mac_lib[i][j] != addr2[j])
-      {
-        flag = false;
-        break;
-      }
+    if (client.connect(THINGNAME)) {
+      Serial.println("Conectado");
+      
+    } else {
+      Serial.print("Fallo, rc=");
+      Serial.print(client.state());
+      Serial.println(" intentar de nuevo en 5 segundos \n");
+      if(WiFi.status() != WL_CONNECTED){
+      Serial.println("Se presento desconexión de internet reintentando conexión \n");
+      wifiInit();
+      };
+      delay(5000);// Wait 5 seconds before retrying
     }
-    if (flag == true)
-      return 0;
   }
-  for (char j = 0; j < 6; j++)
-  {
-    mac_lib[mac_count][j] = addr2[j];
-  }
-  mac_count++;
-  return 1;
 }
 
-// the setup function runs once when you press reset or power the board
-void setup() {
-  // initialize digital pin 5 as an output.
-  Serial.begin(115200);
+void publishMessage( String PPROM_M,String MNGMT,String DATA,String PPROM_D)
+{
+  StaticJsonDocument<200> doc;
+  //doc["device_id"] = "ESP32_sensor";
+  doc["time"] = DateTime.format(DateFormatter::SIMPLE).c_str();
+  doc["PPM"]=PPROM_M;
+  doc["Management"] = MNGMT;
+  doc["Data"] = DATA;
+  doc["PPD"]=PPROM_D;
+  doc["Personas"]="";
+  char jsonBuffer[512];
+  serializeJson(doc, jsonBuffer); // print to client
+
+  datos = PPROM_M + "," + MNGMT + "," + DATA + "," + PPROM_D;
+  int str_len = datos.length() + 1; 
+  char char_array[str_len];
+  datos.toCharArray(char_array, str_len);
+  
+  client.publish(AWS_IOT_PUBLISH_TOPIC, jsonBuffer);
+  client.publish(AWS_IOT_PUBLISH_TOPIC3, char_array);
+}
+
+void publishMessage2(String TYPE,String MAC, String PRSSI, String CHANN)
+{
+  StaticJsonDocument<200> doc;
+ // doc["device_id"] = "ESP32_sensor";
+  doc["time"] = DateTime.format(DateFormatter::SIMPLE).c_str();
+  doc["T"]=TYPE;
+  doc["MAC"] = MAC;
+  doc["RSSI"] = PRSSI;
+  doc["CHANN"]=CHANN;
+  doc["Personas"]="";
+   
+  char jsonBuffer[512];
+  serializeJson(doc, jsonBuffer); // print to client
+
+  client.publish(AWS_IOT_PUBLISH_TOPIC2, jsonBuffer);
+}
+
+void setupDateTime() {
+  // setup this after wifi connected
+  // you can use custom timeZone,server and timeout
+  //DateTime.setServer("time.pool.aliyun.com");
+  DateTime.setTimeZone("CST+5");
+  DateTime.begin();
+ }
+
+void serialEvent() {
+  while (Serial2.available()) {
+    // get the new byte:
+    char inChar = (char)Serial2.read();
+    // add it to the inputString:
+    inputString += inChar;
+    // if the incoming character is a newline, set a flag so the main loop can
+    // do something about it:
+    if (inChar == '\n') {
+      stringComplete = true;
+    }
+  } client.loop();
+}
+
+void divide_mensaje(String inputString){
+
+    PPROM_M=s.separa(inputString,',',0);
+    MNGMT=s.separa(inputString,',',1);
+    DATA=s.separa(inputString,',',2);
+    PPROM_D=s.separa(inputString,',',3);
+    TYPE=s.separa(inputString,',',4);
+    MAC=s.separa(inputString,',',5);
+    PRSSI=s.separa(inputString,',',6);
+    CHANN=s.separa(inputString,',',7);
+    
+  }
+
+
+void restaura(){
+  
+    inputString = "";
+    
+    MNGMT="";
+    DATA="";
+    PPROM_M="";
+    PPROM_D="";
+    TYPE="";
+    MAC="";
+    PRSSI="";
+    CHANN="";
+    stringComplete = false;
+    datos="";
+
+}
+
+void setup()
+{
+  Serial.begin(115200); // initialize serial communication at 115200 bits per second:
   Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2);
   delay(10);
-  wifi_sniffer_init();
-  pinMode(LED_GPIO_PIN, OUTPUT);
-  
+  wifiInit();
+  connectAWS();
+  setupDateTime();
+  Serial.print("-----Conectado---- \n");
+ 
 }
 
-// the loop function runs over and over again forever
-void loop() {
-   delay(2000); // wait for a second
-  
-  vTaskDelay(WIFI_CHANNEL_SWITCH_INTERVAL / portTICK_PERIOD_MS);
-  wifi_sniffer_set_channel(channel);
-  channel = (channel % WIFI_CHANNEL_MAX) + 1;
- if (channel == 1)
-  {
-    String data = create_data_str(mac_count,data_count,mgmnt_count,pot_prom_m,pot_prom_d);
-    Serial.println(data);
-    Serial2.println(data);
-    mac_count = 0;
-    data_count=0;
-    mgmnt_count=0;
-    pot_prom_m=0;
-    pot_prom_d=0;
+void loop()
+{
+     if (!client.connected()) {
+    reconnect();
   }
+   
+if (stringComplete) {
+      divide_mensaje(inputString);
+      Serial.println("---------PRUEBA Type---------------\n");
+      Serial.println(TYPE);
+      if(DATA != ""){
+      publishMessage(PPROM_M,MNGMT,DATA,PPROM_D);
+      
+      Serial.println("---------Cantidad Mensajes Data------------------\n");
+      Serial.println(DATA);
+      Serial.println("---------Cantidad Mensajes MNGMT------------------\n");
+      Serial.println(MNGMT);
+      Serial.println("----------Potencia Promedio MNGMT -----------------\n");
+      Serial.println(PPROM_M);
+      Serial.println("----------Potencia Promedio DATA -----------------\n");
+      Serial.println(PPROM_D);}
+      else
+      {
+        publishMessage2(TYPE,MAC,PRSSI,CHANN);
+        }
+      client.loop();
+      Serial.println("enviado");
+     
+    // clear the string:
+    restaura();
+  }
+      client.loop();
+      serialEvent();
+  
+      
+  
 }
