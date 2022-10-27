@@ -1,0 +1,121 @@
+import boto3
+import json
+import logging
+from custom_encoder import CustomEncoder
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+dynamodbTableName = 'GestionEspacios'
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(dynamodbTableName)
+
+getMethod = 'GET'
+postMethod = 'POST'
+patchMethod = 'PATCH'
+deleteMethod = 'DELETE'
+espaciosPath = '/espacios'
+
+def lambda_handler(event, context):
+    logger.info(event)
+    httpMethod = event['httpMethod']
+    path = event['path']
+    
+    if httpMethod == getMethod and path == espaciosPath:
+        response = getEspacios()
+    elif httpMethod == postMethod and path == espaciosPath:
+        response = saveEspacio(json.loads(event['body']))
+    elif httpMethod == patchMethod and path == espaciosPath:
+        requestBody = json.loads(event['body'])
+        response = modifyEspacio(requestBody['IdEspacio'],requestBody['updateKey'], requestBody['updateValue'])
+    elif httpMethod == deleteMethod and path == espaciosPath:
+        requestBody = json.loads(event['body'])
+        response = deleteEspacio(requestBody['IdEspacio'])    
+    else:
+        response = buildResponse(404, 'Not Found')
+
+    return response
+
+def getEspacios():
+    try:
+    
+        response = table.scan()
+        result = response['Items']
+
+        while 'LastEvaluatedKey' in response:
+            reponse = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            result.extend(response['Items'])
+
+        body = {
+                 'espacios':result
+        }
+        return buildResponse(200, body)
+    
+        
+    except:
+        logger.exception('Error')
+    
+def saveEspacio(requestBody):
+    try:
+        table.put_item(Item=requestBody)
+        body = {
+                'Operation': 'SAVE',
+                'Message': 'SUCCESS',
+                'Item': requestBody
+        }
+        return buildResponse(200, body)
+    except:
+        logger.exception('error')    
+        
+def modifyEspacio(IdEspacio, updateKey, updateValue):
+    try:
+        response = table.update_item(
+            Key={
+                'IdEspacio': IdEspacio
+            },
+            UpdateExpression='set %s =:value' % updateKey,
+            ExpressionAttributeValues={
+                ':value': updateValue
+            },
+            ReturnValues='UPDATED_NEW'
+        )
+        body = {
+            'Operation': 'UPDATE',
+            'Message': 'SUCCESS',
+            'UpdatedAttributes': response
+        }
+        return buildResponse(200, body)
+    except:
+        logger.exception('error')
+
+def deleteEspacio(IdEspacio):
+    try:
+        response = table.delete_item(
+            Key={
+                'IdEspacio': IdEspacio
+            },
+            ReturnValues='ALL_OLD'
+        )
+        body = {
+            'Operation': 'DELETE',
+            'Message': 'SUCCESS',
+            'deletedItem': response
+        }
+        return buildResponse(200, body)
+    except:
+        logger.exception('error')         
+
+
+def buildResponse(statusCode, body=None):
+    response = {
+        'statusCode': statusCode,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods':'POST,PATCH,GET'
+        }
+    }
+
+    if body is not None:
+      response['body'] = json.dumps(body, cls=CustomEncoder)
+    return response    
