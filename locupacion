@@ -1,0 +1,56 @@
+import boto3
+import json
+import logging
+from custom_encoder import CustomEncoder
+from boto3.dynamodb.conditions import Attr
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+dynamodbTableName = 'OcupacionEspacios'
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(dynamodbTableName)
+
+getMethod = 'GET'
+healthPath = '/health'
+macsPath = '/ocupacion'
+
+def lambda_handler(event, context):
+    logger.info(event)
+    httpMethod = event['httpMethod']
+    path = event['path']
+    if httpMethod == getMethod and path == healthPath:
+        response = buildResponse(200)
+    elif httpMethod == getMethod and path == macsPath:
+        response = getMacs()
+    else:
+        response = buildResponse(404, 'Not Found')
+
+    return response
+
+def getMacs():
+    try:
+        response = table.scan()
+        result = response['Items']
+        
+        body = {
+                 'macs':result
+        }
+        return buildResponse(200, body)
+    
+        
+    except:
+        logger.exception('Error')
+
+def buildResponse(statusCode, body=None):
+    response = {
+        'statusCode': statusCode,
+        'headers': {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        }
+    }
+
+    if body is not None:
+      response['body'] = json.dumps(body, cls=CustomEncoder)
+    return response
