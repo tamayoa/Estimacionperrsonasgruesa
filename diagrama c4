@@ -1,0 +1,48 @@
+@startuml
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Dynamic.puml
+
+AddElementTag("TABLAS", $bgColor="#FF5B33")
+AddElementTag("LAMBDA", $bgColor="#2F4F4F")
+AddElementTag("iot", $bgColor="#CD5C5C")
+AddElementTag("GATEWAY", $bgColor="#808000")
+
+title Sistema de registro de ocupacion de espacios IoT
+System_Ext(Esp32, "Esp32 IoT sensor")
+System_Ext(sistemacosnumidor, "Consumidor de servicios")
+System_Boundary(Awscontainer, "AWS "){
+System_Boundary(Awscontainer3, "AWS IoT"){
+SystemQueue(mqtt1, "IoT mqtt protocol",$tags="iot")
+
+System(IoTCore, "IoT Core",$tags="iot")
+Rel_R(mqtt1,IoTCore,  " ")
+SystemQueue(topic,"IoT rule Esp32 rule",$tags="iot")
+
+Rel(IoTCore, topic, "trasmision ")
+System(apigateway1, "API gateway", $tags="GATEWAY")
+BiRel(Esp32, apigateway1, "Trasmision datos ")
+BiRel(apigateway1, mqtt1, "Trasmision datos nube ")
+BiRel(Esp32, Esp32, "Sensado espacios ")
+
+
+System(AwsLamda, "Aws Lambda", $tags="LAMBDA")
+Rel(topic, AwsLamda, "Analisis ")
+SystemDb(tabla1, "Dynamodb",$tags="TABLAS")
+Rel_L(AwsLamda, tabla1, "Registro sensado")
+
+}
+System_Boundary(Awscontainer2, "AWS"){
+System(AwsLamdaregistro, "Aws Lambda registro",$tags="LAMBDA")
+System(Awsapigateway2, "API gateway 2", $tags="GATEWAY")
+SystemDb(tabla2, "Dynamodb" ,$tags="TABLAS")
+
+
+BiRel(sistemacosnumidor, Awsapigateway2, "Adicion,Consulta,Modificacion")
+BiRel(Awsapigateway2,AwsLamdaregistro , "Adicion,Consulta,Modificacion")
+
+BiRel(AwsLamdaregistro, tabla2, " ")
+BiRel(AwsLamdaregistro, tabla1, "")
+}
+
+}
+@enduml
